@@ -1,0 +1,65 @@
+# --- Python Basics ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+.venv
+pip-log.txt
+
+# --- Jupyter Notebooks ---
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# --- Project Data (CRITICAL) ---
+# Ignore all data files to prevent GitHub upload errors
+*.csv
+*.tsv
+*.json
+*.parquet
+*.pkl
+
+# Specific data folders
+data/
+datasets/
+raw_data/
+processed_data/
+
+# --- Apache Spark Local Artifacts ---
+# Spark creates these folders when running locally
+metastore_db/
+spark-warehouse/
+derby.log
+checkpoint/
+
+# --- Trained Models ---
+# Spark saves models as folders, not single files
+models/
+saved_models/
+*.model
+
+# --- IDE & OS Settings ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Streamlit ---
+.streamlit/secrets.toml
+
+# --- LaTeX Build Artifacts (for your report) ---
+# Keep the .tex file, ignore the build clutter
+*.aux
+*.glo
+*.idx
+*.log
+*.toc
+*.out
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+*.pdf
+# (Keep the PDF only if you want the final report in the repo, otherwise ignore it)
