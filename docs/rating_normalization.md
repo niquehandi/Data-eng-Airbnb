@@ -5,7 +5,7 @@ the [4.6, 5.0] range. This distribution limits the collaborative filtering model
 
 We applied percentile-based normalization, mapping each rating's percentile rank to the [1, 5] scale:
 
-$$r_{\text{norm}} = 1 + 4 \times \text{percentile\_rank}(r_{\text{orig}})$$
+$$r_{norm} = 1 + 4 \times \mathrm{percentile\\_rank}(r_{orig})$$
 
 **Transformation Impact:**
 
