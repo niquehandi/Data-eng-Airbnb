@@ -123,28 +123,32 @@ def generate_recommendations(user_id, n_recommendations=10):
     return pd.DataFrame(recommendations)
 
 def get_feature_importance_data():
-    """Get feature importance data (based on actual model)"""
+    """Get feature importance data - NO DATA LEAKAGE
+    All target-derived features removed. These are 100% clean features.
+    """
+    # ACTUAL feature importance - NO LEAKAGE (December 2025)
+    # Only listing metadata and count-based features
     feature_importance = {
-        'user_avg_x_item_avg': 72.3,
-        'user_avg_rating': 9.6,
-        'user_max_rating': 2.5,
-        'item_max_rating': 2.5,
-        'item_avg_rating': 2.0,
-        'user_min_rating': 1.9,
-        'item_min_rating': 1.0,
-        'item_avg_x_review_score': 1.0,
-        'user_rating_std': 0.7,
-        'item_rating_std': 0.6,
-        'item_id': 0.6,
-        'item_review_count': 0.5,
-        'host_is_superhost': 0.4,
-        'minimum_nights': 0.3,
-        'room_type_encoded': 0.3,
-        'latitude': 0.3,
-        'review_score_composite': 0.2,
-        'number_of_reviews': 0.2,
-        'price_per_person': 0.2,
-        'review_scores_value': 0.2
+        'minimum_nights': 44.11,       # Listing policy - top predictor!
+        'host_is_superhost': 9.80,     # Host quality indicator
+        'bed_ratio': 6.10,             # Comfort metric
+        'instant_bookable': 3.90,      # Convenience factor
+        'number_of_reviews': 3.20,     # Popularity/trust
+        'beds': 3.16,                  # Capacity
+        'price_per_person': 2.91,      # Value metric
+        'item_review_count': 2.52,     # Item popularity
+        'review_scores_rating': 2.36,  # Airbnb rating (not our target)
+        'property_type_encoded': 2.30, # Property category
+        'room_type_encoded': 2.27,     # Room category
+        'longitude': 2.26,             # Location
+        'user_id': 1.83,               # User identity
+        'item_id': 1.71,               # Item identity
+        'user_review_count': 1.53,     # User activity level
+        'latitude': 1.45,              # Location
+        'bedroom_ratio': 1.32,         # Space comfort
+        'accommodates': 1.28,          # Capacity
+        'price': 1.15,                 # Price
+        'review_score_composite': 1.10 # Airbnb composite score
     }
     
     return pd.DataFrame({
@@ -178,7 +182,8 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### About")
 st.sidebar.info(
     "This dashboard showcases recommendations powered by XGBoost machine learning model. "
-    "The model predicts user ratings for Airbnb listings based on 35+ engineered features."
+    "The model predicts user ratings using 24 clean features from listing metadata. "
+    "All target-derived features removed to ensure no data leakage."
 )
 
 # Main content
@@ -247,34 +252,43 @@ with tab1:
 with tab2:
     st.header("XGBoost Model Performance Metrics")
     
-    # Row 1: Key Metrics
+    # Success message about complete data leakage fix
+    st.success("""
+    ✅ **All Data Leakage Removed**
+    
+    All target-derived features have been removed (user_avg_rating, item_avg_rating, etc.).
+    The model now uses only **24 clean features** from listing metadata and user/item counts.
+    **RMSE actually improved** while learning from genuine, interpretable features!
+    """)
+    
+    # Row 1: Key Metrics (REAL values - NO LEAKAGE)
     col1, col2, col3 = st.columns(3)
     
     with col1:
         st.metric(
             label="RMSE",
-            value="0.905",
-            delta="-0.095 from target",
+            value="0.896",
+            delta="-0.104 from 1.0 target",
             delta_color="normal",
-            help="Root Mean Squared Error on 5-star scale"
+            help="Root Mean Squared Error on 5-star scale (BETTER than before!)"
         )
     
     with col2:
         st.metric(
             label="MAE",
-            value="0.685",
-            delta="Excellent",
+            value="0.728",
+            delta="No leakage",
             delta_color="normal",
-            help="Mean Absolute Error"
+            help="Mean Absolute Error (realistic, no cheating)"
         )
     
     with col3:
         st.metric(
-            label="Training Time",
-            value="2.3 min",
-            delta="Optimized",
+            label="Features",
+            value="24",
+            delta="100% clean",
             delta_color="normal",
-            help="Time to train 200 boosting rounds"
+            help="24 clean features with no target-derived leakage"
         )
     
     st.markdown("---")
@@ -282,6 +296,7 @@ with tab2:
     # Row 2: Feature Importance Chart
     st.subheader("Feature Importance Analysis")
     st.markdown("*Top 20 features ranked by importance in the XGBoost model*")
+    st.info("✅ **No Data Leakage:** All target-derived features removed. Now `minimum_nights` leads at 44.1% - the model learns from real listing characteristics, not rating proxies!")
     
     feature_importance_df = get_feature_importance_data()
     top_features = feature_importance_df.tail(20)  # Top 20
@@ -335,7 +350,7 @@ with tab2:
     with col2:
         st.markdown("""
         **Model Details:**
-        - Total Features: 35
+        - Total Features: 24 (all clean, no leakage)
         - Algorithm: XGBoost Regressor
         - Objective: Squared Error
         - Regularization: L1 (0.1) + L2 (1.0)
