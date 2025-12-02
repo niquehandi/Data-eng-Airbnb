@@ -296,20 +296,8 @@ def load_train_data():
         return pd.DataFrame()
 
 
-@st.cache_data
-def load_user_mapping():
-    """Load user ID mapping"""
-    try:
-        df = pd.read_csv('data/user_id_mapping.csv')
-        return df
-
-    except Exception as e:
-        st.warning(f"Could not load user mapping: {e}")
-        return pd.DataFrame()
-
-
 def prepare_features_for_prediction(listings_df, train_df, user_id, item_ids):
-    """Prepare features for model prediction"""
+    """Prepare features for model prediction - matches training implementation"""
     try:
         # Get user stats from training data
         user_stats = train_df[train_df['user_id'] == user_id].agg({
@@ -334,39 +322,51 @@ def prepare_features_for_prediction(listings_df, train_df, user_id, item_ids):
             # Get item review count
             item_review_count = item_stats.loc[item_id, 'item_review_count'] if item_id in item_stats.index else 0
 
-            # Create feature vector
-            features = {
-                'user_id': user_id,
-                'item_id': item_id,
-                'user_review_count': user_review_count,
-                'item_review_count': item_review_count,
-                'price': listing.get('price', 0),
-                'accommodates': listing.get('accommodates', 1),
-                'bedrooms': listing.get('bedrooms', 0),
-                'beds': listing.get('beds', 1),
-                'minimum_nights': listing.get('minimum_nights', 1),
-                'number_of_reviews': listing.get('number_of_reviews', 0),
-                'review_scores_rating': listing.get('review_scores_rating', 0),
-                'review_scores_location': listing.get('review_scores_location', 0),
-                'review_scores_value': listing.get('review_scores_value', 0),
-                'latitude': listing.get('latitude', 0),
-                'longitude': listing.get('longitude', 0),
-                'host_is_superhost': 1 if listing.get('host_is_superhost') else 0,
-                'instant_bookable': 1 if listing.get('instant_bookable') else 0,
-            }
+            # Create feature vector with proper data types and missing value handling
+            features = {'user_id': user_id, 'item_id': item_id, 'user_review_count': user_review_count,
+                        'item_review_count': item_review_count,
+                        'price': float(listing.get('price', 0)) if pd.notna(listing.get('price')) else 0.0,
+                        'accommodates': float(listing.get('accommodates', 1)) if pd.notna(
+                            listing.get('accommodates')) else 1.0,
+                        'bedrooms': float(listing.get('bedrooms', 0)) if pd.notna(listing.get('bedrooms')) else 0.0,
+                        'beds': float(listing.get('beds', 1)) if pd.notna(listing.get('beds')) else 1.0,
+                        'minimum_nights': float(listing.get('minimum_nights', 1)) if pd.notna(
+                            listing.get('minimum_nights')) else 1.0,
+                        'number_of_reviews': float(listing.get('number_of_reviews', 0)) if pd.notna(
+                            listing.get('number_of_reviews')) else 0.0,
+                        'review_scores_rating': float(listing.get('review_scores_rating', 0)) if pd.notna(
+                            listing.get('review_scores_rating')) else 0.0,
+                        'review_scores_location': float(listing.get('review_scores_location', 0)) if pd.notna(
+                            listing.get('review_scores_location')) else 0.0,
+                        'review_scores_value': float(listing.get('review_scores_value', 0)) if pd.notna(
+                            listing.get('review_scores_value')) else 0.0,
+                        'latitude': float(listing.get('latitude', 0)) if pd.notna(listing.get('latitude')) else 0.0,
+                        'longitude': float(listing.get('longitude', 0)) if pd.notna(listing.get('longitude')) else 0.0,
+                        'host_is_superhost': float(listing.get('host_is_superhost', False)) if pd.notna(
+                            listing.get('host_is_superhost')) else 0.0,
+                        'instant_bookable': float(listing.get('instant_bookable', False)) if pd.notna(
+                            listing.get('instant_bookable')) else 0.0}
 
-            # Add encoded categorical features (simplified encoding)
-            property_type_map = {'Entire home/apt': 0, 'Private room': 1, 'Shared room': 2, 'Hotel room': 3}
-            room_type_map = {'Entire home/apt': 0, 'Private room': 1, 'Shared room': 2, 'Hotel room': 3}
+            # Handle boolean columns properly (convert to float, fill NaN with 0)
 
-            features['property_type_encoded'] = property_type_map.get(listing.get('property_type', ''), 0)
-            features['room_type_encoded'] = room_type_map.get(listing.get('room_type', ''), 0)
-            features['neighbourhood_cleansed_encoded'] = hash(str(listing.get('neighbourhood_cleansed', ''))) % 100
+            # Handle categorical features with proper encoding (fill NaN with 'unknown')
+            property_type = str(listing.get('property_type', 'unknown')) if pd.notna(
+                listing.get('property_type')) else 'unknown'
+            room_type = str(listing.get('room_type', 'unknown')) if pd.notna(listing.get('room_type')) else 'unknown'
+            neighbourhood = str(listing.get('neighbourhood_cleansed', 'unknown')) if pd.notna(
+                listing.get('neighbourhood_cleansed')) else 'unknown'
 
-            # Add derived features
+            # Use hash-based encoding for categorical features (consistent with training)
+            features['property_type_encoded'] = hash(property_type) % 1000  # Increased range for better distribution
+            features['room_type_encoded'] = hash(room_type) % 1000
+            features['neighbourhood_cleansed_encoded'] = hash(neighbourhood) % 1000
+
+            # Create derived features (exactly as in training)
             features['price_per_person'] = features['price'] / (features['accommodates'] + 1e-6)
             features['bedroom_ratio'] = features['bedrooms'] / (features['accommodates'] + 1e-6)
             features['bed_ratio'] = features['beds'] / (features['accommodates'] + 1e-6)
+
+            # Review score composite (using fillna(0) as in training)
             features['review_score_composite'] = (
                     features['review_scores_rating'] * 0.5 +
                     features['review_scores_location'] * 0.3 +
@@ -375,7 +375,18 @@ def prepare_features_for_prediction(listings_df, train_df, user_id, item_ids):
 
             features_list.append(features)
 
-        return pd.DataFrame(features_list)
+        # Create DataFrame
+        df = pd.DataFrame(features_list)
+
+        # Apply median imputation for numeric features (as done in training)
+        if not df.empty:
+            numeric_features = [col for col in df.columns if col not in ['user_id', 'item_id']]
+            for col in numeric_features:
+                if col in df.columns:
+                    # Use 0 as fallback for missing values (consistent with training approach)
+                    df[col] = df[col].fillna(0)
+
+        return df
 
     except Exception as e:
         st.error(f"Error preparing features: {e}")
@@ -460,29 +471,31 @@ def generate_recommendations_with_model(model, model_info, user_id, listings_df,
         return []
 
 
-def get_user_metadata_from_data(train_df, user_mapping_df):
+def get_user_metadata_from_data(train_df):
     """Get user metadata from actual data"""
     try:
-        user_stats = train_df.groupby('user_id').agg({
+        # Group by reviewer_id instead of user_id
+        reviewer_info = train_df.groupby('reviewer_id').agg({
+            'reviewer_name': 'first',
+            'user_id': 'first',  # Keep user_id for model predictions
             'rating': ['count', 'mean'],
             'item_id': 'nunique'
-        }).round(2)
+        })
 
-        user_stats.columns = ['booking_count', 'avg_rating', 'unique_listings']
+        # Flatten column names
+        reviewer_info.columns = ['reviewer_name', 'user_id', 'booking_count', 'avg_rating', 'unique_listings']
+        reviewer_info = reviewer_info.round(2)
+
         user_metadata = {}
 
-        for user_id in user_stats.index:
-            stats = user_stats.loc[user_id]
+        for reviewer_id in reviewer_info.index:
+            stats = reviewer_info.loc[reviewer_id]
+            reviewer_name = stats['reviewer_name'] if pd.notna(stats['reviewer_name']) else f"Reviewer {reviewer_id}"
 
-            # Try to get name from mapping, otherwise generate
-            if not user_mapping_df.empty and user_id in user_mapping_df['user_id'].values:
-                reviewer_id = user_mapping_df[user_mapping_df['user_id'] == user_id]['reviewer_id'].iloc[0]
-                name = f"User {reviewer_id}"
-            else:
-                name = f"User {user_id}"
-
-            user_metadata[user_id] = {
-                'name': name,
+            user_metadata[reviewer_id] = {
+                'reviewer_id': reviewer_id,
+                'reviewer_name': reviewer_name,
+                'user_id': stats['user_id'],  # Store user_id for model
                 'history': int(stats['booking_count']),
                 'avg_rating': float(stats['avg_rating']),
                 'unique_listings': int(stats['unique_listings'])
@@ -499,11 +512,10 @@ def get_user_metadata_from_data(train_df, user_mapping_df):
 model, model_info, feature_importance = load_model_artifacts()
 listings_df = load_listings_data()
 train_df = load_train_data()
-user_mapping_df = load_user_mapping()
 
 # Get user metadata from actual data
 if not train_df.empty:
-    user_metadata = get_user_metadata_from_data(train_df, user_mapping_df)
+    user_metadata = get_user_metadata_from_data(train_df)
 else:
     user_metadata = {}
 
@@ -513,25 +525,36 @@ st.sidebar.markdown("---")
 
 # User selection
 if user_metadata:
-    user_ids = list(user_metadata.keys())
+    reviewer_ids = list(user_metadata.keys())
+
+    # Initialize random user selection in session state (only on first load)
+    if 'random_user_index' not in st.session_state:
+        st.session_state.random_user_index = np.random.randint(0, len(reviewer_ids))
+
     st.sidebar.markdown("### Select User")
-    selected_user = st.sidebar.selectbox(
-        "User ID",
-        options=user_ids,
-        format_func=lambda x: f"{user_metadata[x]['name']} ({x})",
+    selected_reviewer = st.sidebar.selectbox(
+        "Reviewer ID",
+        options=reviewer_ids,
+        index=st.session_state.random_user_index,
+        format_func=lambda x: f"{user_metadata[x]['reviewer_name']} ({x})",
         label_visibility="collapsed"
     )
 
     # Display user metadata
     st.sidebar.markdown("---")
     st.sidebar.markdown("### User Profile")
-    user_info = user_metadata[selected_user]
-    st.sidebar.markdown(f"**Name:** {user_info['name']}")
+    user_info = user_metadata[selected_reviewer]
+    st.sidebar.markdown(f"**Reviewer Name:** {user_info['reviewer_name']}")
+    st.sidebar.markdown(f"**Reviewer ID:** {user_info['reviewer_id']}")
     st.sidebar.markdown(f"**Booking History:** {user_info['history']} ratings")
-    st.sidebar.markdown(f"**Average Rating:** {user_info['avg_rating']:.1f} / 5.0")
+    st.sidebar.markdown(f"**Average Rating:** {user_info['avg_rating']:.1f}")
     st.sidebar.markdown(f"**Unique Listings:** {user_info['unique_listings']}")
+
+    # Get the user_id for model predictions
+    selected_user = user_info['user_id']
 else:
     st.sidebar.error("No user data available. Please check data files.")
+    selected_reviewer = None
     selected_user = None
 
 st.sidebar.markdown("---")
@@ -548,7 +571,7 @@ st.markdown('<h1 class="main-header">Airbnb Recommendation Dashboard</h1>', unsa
 st.markdown('<p class="sub-header">Personalized listing recommendations powered by trained XGBoost model</p>',
             unsafe_allow_html=True)
 
-if model is None or selected_user is None:
+if model is None or selected_user is None or selected_reviewer is None:
     st.error("Cannot generate recommendations. Please ensure the model is trained and user data is available.")
     st.stop()
 
@@ -557,7 +580,7 @@ tab1, tab2 = st.tabs(["User Recommendations", "Model Performance"])
 
 # Tab 1: User Recommendations
 with tab1:
-    st.markdown(f'<p class="section-header">Top 10 Picks for {user_metadata[selected_user]["name"]}</p>',
+    st.markdown(f'<p class="section-header">Top 10 Picks for {user_metadata[selected_reviewer]["reviewer_name"]}</p>',
                 unsafe_allow_html=True)
     st.markdown("*Personalized recommendations based on your preferences and booking history*")
 
