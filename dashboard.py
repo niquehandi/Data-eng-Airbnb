@@ -1,19 +1,18 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime
-import xgboost as xgb
 import json
-import os
-from sklearn.preprocessing import LabelEncoder
+import random
+from datetime import datetime
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+import xgboost as xgb
 
 # Page configuration
 st.set_page_config(
     page_title="Airbnb Recommender Dashboard",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # Custom CSS - Dark Futuristic Theme (keeping the existing styling)
@@ -122,20 +121,6 @@ st.markdown("""
 
     [data-testid="stMetricLabel"] {
         color: #E0E0E0 !important;
-    }
-
-    /* Sidebar styling */
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #2C003E 0%, #1a0025 100%);
-        border-right: 1px solid rgba(131, 56, 236, 0.3);
-    }
-
-    [data-testid="stSidebar"] .stMarkdown {
-        color: #E0E0E0;
-    }
-
-    [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
-        color: #FFFFFF !important;
     }
 
     /* Selectbox styling */
@@ -508,6 +493,146 @@ def get_user_metadata_from_data(train_df):
         return {}
 
 
+@st.cache_data
+def calculate_ranking_metrics(_model, _model_info, _train_df, _listings_df):
+    """Calculate ranking metrics on test data"""
+    try:
+        test_df = pd.read_parquet('data/test.parquet')
+
+        # Prepare features for test set (simplified version)
+        user_stats = _train_df.groupby('user_id')['item_id'].count().to_dict()
+        item_stats = _train_df.groupby('item_id')['user_id'].count().to_dict()
+
+        # Merge with listings
+        test_merged = test_df.merge(_listings_df, on='listing_id', how='left')
+
+        # Build feature matrix
+        features_df = pd.DataFrame({
+            'user_id': test_merged['user_id'],
+            'item_id': test_merged['item_id'],
+            'user_review_count': test_merged['user_id'].map(user_stats).fillna(0),
+            'item_review_count': test_merged['item_id'].map(item_stats).fillna(0),
+            'price': test_merged['price'].fillna(0),
+            'accommodates': test_merged['accommodates'].fillna(1),
+            'bedrooms': test_merged['bedrooms'].fillna(0),
+            'beds': test_merged['beds'].fillna(1),
+            'minimum_nights': test_merged['minimum_nights'].fillna(1),
+            'number_of_reviews': test_merged['number_of_reviews'].fillna(0),
+            'review_scores_rating': test_merged['review_scores_rating'].fillna(0),
+            'review_scores_location': test_merged['review_scores_location'].fillna(0),
+            'review_scores_value': test_merged['review_scores_value'].fillna(0),
+            'latitude': test_merged['latitude'].fillna(0),
+            'longitude': test_merged['longitude'].fillna(0),
+            'property_type_encoded': test_merged['property_type'].fillna('unknown').apply(
+                lambda x: hash(str(x)) % 1000),
+            'room_type_encoded': test_merged['room_type'].fillna('unknown').apply(lambda x: hash(str(x)) % 1000),
+            'neighbourhood_cleansed_encoded': test_merged['neighbourhood_cleansed'].fillna('unknown').apply(
+                lambda x: hash(str(x)) % 1000),
+            'host_is_superhost': test_merged['host_is_superhost'].fillna(0).astype(float),
+            'instant_bookable': test_merged['instant_bookable'].fillna(0).astype(float),
+        })
+
+        # Derived features
+        features_df['price_per_person'] = features_df['price'] / (features_df['accommodates'] + 1e-6)
+        features_df['bedroom_ratio'] = features_df['bedrooms'] / (features_df['accommodates'] + 1e-6)
+        features_df['bed_ratio'] = features_df['beds'] / (features_df['accommodates'] + 1e-6)
+        features_df['review_score_composite'] = (
+                features_df['review_scores_rating'] * 0.5 +
+                features_df['review_scores_location'] * 0.3 +
+                features_df['review_scores_value'] * 0.2
+        )
+
+        # Ensure all expected features exist
+        for feat in _model_info['feature_names']:
+            if feat not in features_df.columns:
+                features_df[feat] = 0
+
+        X_test = features_df[_model_info['feature_names']].fillna(0)
+        y_test = test_df['rating'].values
+
+        # Predictions
+        y_pred = np.clip(_model.predict(X_test), 1.0, 5.0)
+
+        # Create predictions DataFrame
+        predictions_df = pd.DataFrame({
+            'user_id': test_df['user_id'].values,
+            'item_id': test_df['item_id'].values,
+            'rating': y_test,
+            'prediction': y_pred
+        })
+
+        # Calculate ranking metrics
+        from scipy.stats import spearmanr
+        from sklearn.metrics import ndcg_score
+
+        metrics = {}
+
+        # NDCG@10
+        ndcg_scores = []
+        for user_id, group in predictions_df.groupby('user_id'):
+            if len(group) >= 2:
+                true_relevance = group['rating'].values.reshape(1, -1)
+                pred_scores = group['prediction'].values.reshape(1, -1)
+                ndcg = ndcg_score(true_relevance, pred_scores, k=10)
+                ndcg_scores.append(ndcg)
+        metrics['NDCG@10'] = np.mean(ndcg_scores) if ndcg_scores else 0
+
+        # Hit Rate and Precision/Recall
+        for k in [5, 10]:
+            hit_rates = []
+            precisions = []
+            recalls = []
+
+            for user_id, group in predictions_df.groupby('user_id'):
+                if len(group) < 2:
+                    continue
+
+                sorted_by_pred = group.sort_values('prediction', ascending=False)
+                sorted_by_actual = group.sort_values('rating', ascending=False)
+
+                top_actual_item = sorted_by_actual.iloc[0]['item_id']
+                top_k_items = set(sorted_by_pred.head(k)['item_id'])
+
+                hit_rates.append(1 if top_actual_item in top_k_items else 0)
+
+                relevant_items = set(group[group['rating'] >= 4]['item_id'])
+                if len(relevant_items) > 0:
+                    precisions.append(len(top_k_items & relevant_items) / k)
+                    recalls.append(len(top_k_items & relevant_items) / len(relevant_items))
+
+            metrics[f'HitRate@{k}'] = np.mean(hit_rates) if hit_rates else 0
+            metrics[f'Precision@{k}'] = np.mean(precisions) if precisions else 0
+            metrics[f'Recall@{k}'] = np.mean(recalls) if recalls else 0
+
+        # Spearman Correlation
+        correlations = []
+        for user_id, group in predictions_df.groupby('user_id'):
+            if len(group) >= 3:
+                corr, _ = spearmanr(group['rating'], group['prediction'])
+                if not np.isnan(corr):
+                    correlations.append(corr)
+        metrics['Spearman'] = np.mean(correlations) if correlations else 0
+
+        # Distribution stats
+        metrics['pred_mean'] = float(y_pred.mean())
+        metrics['pred_std'] = float(y_pred.std())
+        metrics['actual_mean'] = float(y_test.mean())
+        metrics['actual_std'] = float(y_test.std())
+
+        # Highest rated recommendations stats
+        highest_rated = predictions_df.loc[predictions_df.groupby('user_id')['prediction'].idxmax()]
+        metrics['top_rec_mean'] = float(highest_rated['prediction'].mean())
+        metrics['top_rec_std'] = float(highest_rated['prediction'].std())
+        metrics['top_rec_min'] = float(highest_rated['prediction'].min())
+        metrics['top_rec_max'] = float(highest_rated['prediction'].max())
+
+        return metrics, predictions_df
+
+    except Exception as e:
+        st.error(f"Error calculating metrics: {e}")
+        return None, None
+
+
 # Load all data
 model, model_info, feature_importance = load_model_artifacts()
 listings_df = load_listings_data()
@@ -519,60 +644,13 @@ if not train_df.empty:
 else:
     user_metadata = {}
 
-# Sidebar
-st.sidebar.markdown("## Airbnb Recommender")
-st.sidebar.markdown("---")
-
-# User selection
-if user_metadata:
-    reviewer_ids = list(user_metadata.keys())
-
-    # Initialize random user selection in session state (only on first load)
-    if 'random_user_index' not in st.session_state:
-        st.session_state.random_user_index = np.random.randint(0, len(reviewer_ids))
-
-    st.sidebar.markdown("### Select User")
-    selected_reviewer = st.sidebar.selectbox(
-        "Reviewer ID",
-        options=reviewer_ids,
-        index=st.session_state.random_user_index,
-        format_func=lambda x: f"{user_metadata[x]['reviewer_name']} ({x})",
-        label_visibility="collapsed"
-    )
-
-    # Display user metadata
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### User Profile")
-    user_info = user_metadata[selected_reviewer]
-    st.sidebar.markdown(f"**Reviewer Name:** {user_info['reviewer_name']}")
-    st.sidebar.markdown(f"**Reviewer ID:** {user_info['reviewer_id']}")
-    st.sidebar.markdown(f"**Booking History:** {user_info['history']} ratings")
-    st.sidebar.markdown(f"**Average Rating:** {user_info['avg_rating']:.1f}")
-    st.sidebar.markdown(f"**Unique Listings:** {user_info['unique_listings']}")
-
-    # Get the user_id for model predictions
-    selected_user = user_info['user_id']
-else:
-    st.sidebar.error("No user data available. Please check data files.")
-    selected_reviewer = None
-    selected_user = None
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("### Dataset Info")
-if model_info:
-    st.sidebar.success(
-        f"WIP"
-    )
-else:
-    st.sidebar.error("❌ **Model Not Loaded**\n\nPlease run XGBoost.ipynb first")
-
 # Main content
 st.markdown('<h1 class="main-header">Airbnb Recommendation Dashboard</h1>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">Personalized listing recommendations powered by trained XGBoost model</p>',
             unsafe_allow_html=True)
 
-if model is None or selected_user is None or selected_reviewer is None:
-    st.error("Cannot generate recommendations. Please ensure the model is trained and user data is available.")
+if model is None:
+    st.error("Cannot generate recommendations. Please ensure the model is trained.")
     st.stop()
 
 # Create tabs
@@ -580,6 +658,36 @@ tab1, tab2 = st.tabs(["User Recommendations", "Model Performance"])
 
 # Tab 1: User Recommendations
 with tab1:
+    # User selection moved here
+    st.markdown('<p class="section-header">Select User</p>', unsafe_allow_html=True)
+
+    if user_metadata:
+        # Randomize reviewer_ids once per session
+        if 'randomized_reviewer_ids' not in st.session_state:
+            reviewer_ids = list(user_metadata.keys())
+            random.shuffle(reviewer_ids)
+            st.session_state.randomized_reviewer_ids = reviewer_ids
+
+        reviewer_ids = st.session_state.randomized_reviewer_ids
+
+        selected_reviewer = st.selectbox(
+            "Reviewer ID",
+            options=reviewer_ids,
+            format_func=lambda x: f"{user_metadata[x]['reviewer_name']} ({x})",
+            label_visibility="collapsed"
+        )
+        user_info = user_metadata[selected_reviewer]
+        selected_user = user_info['user_id']
+    else:
+        st.error("No user data available. Please check data files.")
+        selected_reviewer = None
+        selected_user = None
+
+    if selected_user is None or selected_reviewer is None:
+        st.error("Please select a user to generate recommendations.")
+        st.stop()
+
+    st.markdown("---")
     st.markdown(f'<p class="section-header">Top 10 Picks for {user_metadata[selected_reviewer]["reviewer_name"]}</p>',
                 unsafe_allow_html=True)
     st.markdown("*Personalized recommendations based on your preferences and booking history*")
@@ -655,38 +763,54 @@ with tab2:
     st.markdown('<p class="section-header">Trained XGBoost Model Performance</p>', unsafe_allow_html=True)
 
     if model_info:
-        st.success(f"""
-        WIP
-        """)
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            st.metric(
-                label="Test RMSE",
-                value=f"{model_info['test_rmse']:.3f}",
-                delta=f"CV: {model_info.get('cv_rmse', 0):.3f}",
-                delta_color="normal",
-                help="Root Mean Squared Error on test set"
+        # Calculate ranking metrics
+        with st.spinner("Calculating ranking metrics..."):
+            ranking_metrics, predictions_df = calculate_ranking_metrics(
+                model, model_info, train_df, listings_df
             )
 
-        with col2:
-            st.metric(
-                label="Test MAE",
-                value=f"{model_info['test_mae']:.3f}",
-                delta="No leakage",
-                delta_color="normal",
-                help="Mean Absolute Error (clean features only)"
-            )
+        # Main Performance Summary
+        st.markdown("### Recommendation Quality")
 
-        with col3:
-            st.metric(
-                label="Features",
-                value=str(model_info['n_features']),
-                delta="100% clean",
-                delta_color="normal",
-                help=f"{model_info['n_features']} features with no target-derived leakage"
-            )
+        if ranking_metrics:
+            # Top-level metrics in prominent cards
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                ndcg_val = ranking_metrics.get('NDCG@10', 0)
+                st.metric(
+                    label="NDCG@10",
+                    value=f"{ndcg_val:.2%}",
+                    delta="Excellent" if ndcg_val > 0.9 else "Good" if ndcg_val > 0.7 else "Fair",
+                    help="Normalized Discounted Cumulative Gain - measures ranking quality"
+                )
+
+            with col2:
+                hr_val = ranking_metrics.get('HitRate@5', 0)
+                st.metric(
+                    label="HitRate@5",
+                    value=f"{hr_val:.2%}",
+                    delta="Top item found" if hr_val > 0.9 else "",
+                    help="Probability that user's favorite item appears in top 5"
+                )
+
+            with col3:
+                st.metric(
+                    label="Test RMSE",
+                    value=f"{model_info['test_rmse']:.3f}",
+                    delta=f"CV: {model_info.get('cv_rmse', 0):.3f}",
+                    delta_color="normal",
+                    help="Root Mean Squared Error on test set"
+                )
+
+            with col4:
+                st.metric(
+                    label="Test MAE",
+                    value=f"{model_info['test_mae']:.3f}",
+                    delta="No leakage",
+                    delta_color="normal",
+                    help="Mean Absolute Error"
+                )
 
         st.markdown("---")
 
@@ -713,9 +837,6 @@ with tab2:
         # Feature importance from trained model
         if feature_importance is not None and not feature_importance.empty:
             st.markdown('<p class="section-header">Feature Importance Analysis</p>', unsafe_allow_html=True)
-            st.markdown("*Features ranked by importance in the trained XGBoost model*")
-            st.info(
-                "WIP")
 
             # Convert importance to percentage
             feature_importance['importance_pct'] = (feature_importance['importance'] / feature_importance[
