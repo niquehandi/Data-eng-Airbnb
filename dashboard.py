@@ -777,24 +777,6 @@ with tab2:
             col1, col2, col3, col4 = st.columns(4)
 
             with col1:
-                ndcg_val = ranking_metrics.get('NDCG@10', 0)
-                st.metric(
-                    label="NDCG@10",
-                    value=f"{ndcg_val:.2%}",
-                    delta="Excellent" if ndcg_val > 0.9 else "Good" if ndcg_val > 0.7 else "Fair",
-                    help="Normalized Discounted Cumulative Gain - measures ranking quality"
-                )
-
-            with col2:
-                hr_val = ranking_metrics.get('HitRate@5', 0)
-                st.metric(
-                    label="HitRate@5",
-                    value=f"{hr_val:.2%}",
-                    delta="Top item found" if hr_val > 0.9 else "",
-                    help="Probability that user's favorite item appears in top 5"
-                )
-
-            with col3:
                 st.metric(
                     label="Test RMSE",
                     value=f"{model_info['test_rmse']:.3f}",
@@ -803,13 +785,31 @@ with tab2:
                     help="Root Mean Squared Error on test set"
                 )
 
-            with col4:
+            with col2:
                 st.metric(
                     label="Test MAE",
                     value=f"{model_info['test_mae']:.3f}",
                     delta="No leakage",
                     delta_color="normal",
                     help="Mean Absolute Error"
+                )
+
+            with col3:
+                ndcg_val = ranking_metrics.get('NDCG@10', 0)
+                st.metric(
+                    label="NDCG@10",
+                    value=f"{ndcg_val:.2%}",
+                    delta="Excellent" if ndcg_val > 0.9 else "Good" if ndcg_val > 0.7 else "Fair",
+                    help="Normalized Discounted Cumulative Gain - measures ranking quality"
+                )
+
+            with col4:
+                hr_val = ranking_metrics.get('HitRate@5', 0)
+                st.metric(
+                    label="HitRate@5",
+                    value=f"{hr_val:.2%}",
+                    delta="Top item found" if hr_val > 0.9 else "",
+                    help="Probability that user's favorite item appears in top 5"
                 )
 
         st.markdown("---")
